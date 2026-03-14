@@ -64,8 +64,8 @@ async function startServer() {
       }
     });
 
-    socket.on('shoot', (data: { start: [number, number, number], end: [number, number, number], color: string }) => {
-      socket.broadcast.emit('playerShot', { id: socket.id, ...data });
+    socket.on('throwDisc', (data: { start: [number, number, number], direction: [number, number, number], color: string }) => {
+      socket.broadcast.emit('playerThrownDisc', { id: socket.id, ...data });
     });
 
     socket.on('hitPlayer', (targetId: string) => {

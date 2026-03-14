@@ -3,12 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 
-import { useRef, useMemo } from 'react';
+import { useRef, useMemo, useEffect } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { RigidBody, RapierRigidBody, useRapier, CapsuleCollider } from '@react-three/rapier';
 import * as THREE from 'three';
 import { useGameStore, EnemyData } from '../store';
 import { Text } from '@react-three/drei';
+
+export const enemyPositions: Record<string, THREE.Vector3> = {};
 
 const ENEMY_SPEED = 3;
 const CHASE_DIST = 15; // Reduced from 20
@@ -23,7 +25,7 @@ export function Enemy({ data }: { data: EnemyData }) {
   const gameState = useGameStore(state => state.gameState);
   const playerState = useGameStore(state => state.playerState);
   const hitPlayer = useGameStore(state => state.hitPlayer);
-  const addLaser = useGameStore(state => state.addLaser);
+  const addDisc = useGameStore(state => state.addDisc);
   const addParticles = useGameStore(state => state.addParticles);
 
   const lastShootTime = useRef(0);
@@ -42,6 +44,12 @@ export function Enemy({ data }: { data: EnemyData }) {
     );
   }, [data.position]);
 
+  useEffect(() => {
+    return () => {
+      delete enemyPositions[data.id];
+    };
+  }, [data.id]);
+
   useFrame((state_fiber) => {
     if (!body.current || gameState !== 'playing' || data.state === 'disabled') {
       if (body.current) {
@@ -52,6 +60,9 @@ export function Enemy({ data }: { data: EnemyData }) {
 
     const pos = body.current.translation();
     const currentPos = new THREE.Vector3(pos.x, pos.y, pos.z);
+    
+    // Update global position for returning discs
+    enemyPositions[data.id] = currentPos;
     
     let closestTargetPos: THREE.Vector3 | null = null;
     let closestDist = CHASE_DIST;
@@ -112,8 +123,11 @@ export function Enemy({ data }: { data: EnemyData }) {
         rayDir.normalize();
         
         // Offset start position to avoid hitting self
-        const startPos = new THREE.Vector3(currentPos.x, currentPos.y + 0.5, currentPos.z);
-        startPos.add(rayDir.clone().multiplyScalar(1.5));
+        // Enemy origin is at feet, so add 1.0 to shoot from chest height
+        const startPos = new THREE.Vector3(currentPos.x, currentPos.y + 1.0, currentPos.z);
+        
+        // Only offset by 0.6 (just outside the 0.5 radius capsule)
+        startPos.add(rayDir.clone().multiplyScalar(0.6));
 
         const ray = new rapier.Ray(startPos, rayDir);
         const hit = world.castRay(ray, SHOOT_DIST, true);
@@ -124,47 +138,24 @@ export function Enemy({ data }: { data: EnemyData }) {
           if (rb && rb.userData) {
             const userData = rb.userData as { name?: string };
             if (userData.name === 'player') {
-              // Hit player!
-              hitPlayer();
-              addParticles([camera.position.x, camera.position.y, camera.position.z], '#ff0000');
-              addLaser(
+              // Shoot at player
+              addDisc(
                 [startPos.x, startPos.y, startPos.z],
-                [camera.position.x, camera.position.y, camera.position.z],
-                '#ff0000'
+                [rayDir.x, rayDir.y, rayDir.z],
+                '#ff0000',
+                data.id
               );
               lastShootTime.current = now;
             } else if (userData.name?.startsWith('bot-')) {
-              // Hit another enemy!
-              useGameStore.getState().hitEnemy(userData.name);
-              const hitPoint = ray.pointAt(hit.timeOfImpact);
-              addParticles([hitPoint.x, hitPoint.y, hitPoint.z], '#ff0000');
-              addLaser(
+              // Shoot at another enemy
+              addDisc(
                 [startPos.x, startPos.y, startPos.z],
-                [hitPoint.x, hitPoint.y, hitPoint.z],
-                '#ff0000'
-              );
-              lastShootTime.current = now;
-            } else {
-              // Hit wall or obstacle
-              const hitPoint = ray.pointAt(hit.timeOfImpact);
-              addParticles([hitPoint.x, hitPoint.y, hitPoint.z], '#ff0000');
-              addLaser(
-                [startPos.x, startPos.y, startPos.z],
-                [hitPoint.x, hitPoint.y, hitPoint.z],
-                '#ff0000'
+                [rayDir.x, rayDir.y, rayDir.z],
+                '#ff0000',
+                data.id
               );
               lastShootTime.current = now;
             }
-          } else {
-            // Hit wall or obstacle
-            const hitPoint = ray.pointAt(hit.timeOfImpact);
-            addParticles([hitPoint.x, hitPoint.y, hitPoint.z], '#ff0000');
-            addLaser(
-              [startPos.x, startPos.y, startPos.z],
-              [hitPoint.x, hitPoint.y, hitPoint.z],
-              '#ff0000'
-            );
-            lastShootTime.current = now;
           }
         }
       }

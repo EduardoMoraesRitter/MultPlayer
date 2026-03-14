@@ -19,6 +19,30 @@ function HUD() {
   const leaveGame = useGameStore(state => state.leaveGame);
   const isMobile = useIsMobile();
 
+  const [mousePos, setMousePos] = useState({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
+  const [isLocked, setIsLocked] = useState(false);
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!document.pointerLockElement) {
+        setMousePos({ x: e.clientX, y: e.clientY });
+      }
+    };
+    window.addEventListener('mousemove', handleMouseMove);
+    return () => window.removeEventListener('mousemove', handleMouseMove);
+  }, []);
+
+  useEffect(() => {
+    const handleLockChange = () => {
+      setIsLocked(!!document.pointerLockElement);
+      if (document.pointerLockElement) {
+        setMousePos({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
+      }
+    };
+    document.addEventListener('pointerlockchange', handleLockChange);
+    return () => document.removeEventListener('pointerlockchange', handleLockChange);
+  }, []);
+
   const leaderboard = useMemo(() => {
     const players = [
       { id: 'You', score: score, isMe: true },
@@ -34,12 +58,19 @@ function HUD() {
   return (
     <>
       {/* Crosshair */}
-      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none flex flex-col items-center">
+      <div 
+        className="absolute pointer-events-none flex flex-col items-center z-50"
+        style={{ 
+          left: isLocked ? '50%' : mousePos.x, 
+          top: isLocked ? '50%' : mousePos.y, 
+          transform: 'translate(-50%, -50%)' 
+        }}
+      >
         <div className="relative">
           <div className={`w-4 h-4 border-2 rounded-full ${playerState === 'disabled' ? 'border-red-500' : 'border-cyan-400'}`} />
           <div className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-1 h-1 rounded-full ${playerState === 'disabled' ? 'bg-red-500' : 'bg-cyan-400'}`} />
         </div>
-        {!isMobile && <div className="mt-4 text-cyan-400/50 text-xs tracking-widest font-bold">CLICK TO AIM</div>}
+        {!isMobile && !isLocked && <div className="mt-4 text-cyan-400/50 text-xs tracking-widest font-bold whitespace-nowrap">CLICK TO LOCK AIM</div>}
       </div>
 
       {/* HUD Left - Score & Leaderboard */}

@@ -28,12 +28,13 @@ export interface PlayerData {
   color: string;
 }
 
-export interface LaserData {
+export interface DiscData {
   id: string;
   start: [number, number, number];
-  end: [number, number, number];
-  timestamp: number;
+  direction: [number, number, number];
   color: string;
+  ownerId: string;
+  timestamp: number;
 }
 
 export interface ParticleData {
@@ -56,7 +57,7 @@ interface GameStore {
   playerState: EntityState;
   playerDisabledUntil: number;
   enemies: EnemyData[];
-  lasers: LaserData[];
+  discs: DiscData[];
   particles: ParticleData[];
   events: GameEvent[];
   
@@ -70,7 +71,9 @@ interface GameStore {
   updateTime: (delta: number) => void;
   hitPlayer: () => void;
   hitEnemy: (id: string, byPlayer?: boolean) => void;
-  addLaser: (start: [number, number, number], end: [number, number, number], color: string) => void;
+  updateEnemyPosition: (id: string, position: [number, number, number]) => void;
+  addDisc: (start: [number, number, number], direction: [number, number, number], color: string, ownerId: string) => void;
+  removeDisc: (id: string) => void;
   addParticles: (position: [number, number, number], color: string) => void;
   addEvent: (message: string) => void;
   updateEnemies: (time: number) => void;
@@ -111,7 +114,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   playerState: 'active',
   playerDisabledUntil: 0,
   enemies: [],
-  lasers: [],
+  discs: [],
   particles: [],
   events: [],
   
@@ -184,10 +187,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
         });
       });
 
-      newSocket.on('playerShot', (data: { id: string, start: [number, number, number], end: [number, number, number], color: string }) => {
+      newSocket.on('playerThrownDisc', (data: { id: string, start: [number, number, number], direction: [number, number, number], color: string }) => {
         set(state => ({
-          lasers: [...state.lasers, { id: Math.random().toString(36).substr(2, 9), start: data.start, end: data.end, timestamp: Date.now(), color: data.color }],
-          particles: [...state.particles, { id: Math.random().toString(36).substr(2, 9), position: data.end, timestamp: Date.now(), color: data.color }]
+          discs: [...state.discs, { id: Math.random().toString(36).substr(2, 9), start: data.start, direction: data.direction, color: data.color, ownerId: data.id, timestamp: Date.now() }]
         }));
       });
 
@@ -262,7 +264,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       playerState: 'active',
       playerDisabledUntil: 0,
       enemies: INITIAL_ENEMIES.map(e => ({ ...e, state: 'active', disabledUntil: 0 })),
-      lasers: [],
+      discs: [],
       particles: [],
       events: [],
       socket: newSocket,
@@ -288,7 +290,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       socket: null,
       otherPlayers: {},
       enemies: [],
-      lasers: [],
+      discs: [],
       particles: [],
       events: [],
       score: 0,
@@ -338,15 +340,30 @@ export const useGameStore = create<GameStore>((set, get) => ({
     };
   }),
 
-  addLaser: (start, end, color) => {
+  updateEnemyPosition: (id, position) => set((state) => {
+    const enemies = state.enemies.map(e => {
+      if (e.id === id) {
+        return { ...e, position };
+      }
+      return e;
+    });
+    return { enemies };
+  }),
+
+  addDisc: (start, direction, color, ownerId) => {
     const { socket } = get();
-    if (socket) {
-      socket.emit('shoot', { start, end, color });
+    const id = Math.random().toString(36).substr(2, 9);
+    if (socket && ownerId === socket.id) {
+      socket.emit('throwDisc', { start, direction, color });
     }
     set((state) => ({
-      lasers: [...state.lasers, { id: Math.random().toString(36).substr(2, 9), start, end, timestamp: Date.now(), color }]
+      discs: [...state.discs, { id, start, direction, color, ownerId, timestamp: Date.now() }]
     }));
   },
+
+  removeDisc: (id) => set((state) => ({
+    discs: state.discs.filter(d => d.id !== id)
+  })),
 
   addParticles: (position, color) => set((state) => ({
     particles: [...state.particles, { id: Math.random().toString(36).substr(2, 9), position, timestamp: Date.now(), color }]
@@ -386,11 +403,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
   }),
 
   cleanupEffects: (time) => set((state) => {
-    const lasers = state.lasers.filter(l => time - l.timestamp < 200); // Lasers last 200ms
+    const discs = state.discs.filter(d => time - d.timestamp < 10000); // Discs timeout after 10s if stuck
     const particles = state.particles.filter(p => time - p.timestamp < 500); // Particles last 500ms
     const events = state.events.filter(e => time - e.timestamp < 5000); // Events last 5s
-    if (lasers.length !== state.lasers.length || particles.length !== state.particles.length || events.length !== state.events.length) {
-      return { lasers, particles, events };
+    if (discs.length !== state.discs.length || particles.length !== state.particles.length || events.length !== state.events.length) {
+      return { discs, particles, events };
     }
     return state;
   }),

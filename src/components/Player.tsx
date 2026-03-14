@@ -15,12 +15,14 @@ const MAX_LASER_DIST = 100;
 
 export function Player() {
   const body = useRef<RapierRigidBody>(null);
-  const { camera } = useThree();
+  const { camera, mouse } = useThree();
   const { rapier, world } = useRapier();
   
   const playerState = useGameStore(state => state.playerState);
   const gameState = useGameStore(state => state.gameState);
-  const addLaser = useGameStore(state => state.addLaser);
+  const addDisc = useGameStore(state => state.addDisc);
+  const discs = useGameStore(state => state.discs);
+  const socket = useGameStore(state => state.socket);
   const hitEnemy = useGameStore(state => state.hitEnemy);
   const addParticles = useGameStore(state => state.addParticles);
 
@@ -32,8 +34,8 @@ export function Player() {
   const lastShootTime = useRef(0);
 
   const gunGroupRef = useRef<THREE.Group>(null);
-  const gunVisualRef = useRef<THREE.Group>(null);
-  const gunBarrelRef = useRef<THREE.Group>(null);
+  const discVisualRef = useRef<THREE.Group>(null);
+  const throwTimer = useRef(0);
 
   // More robust mobile detection (checks for touch support)
   const isTouchDevice = useRef(false);
@@ -66,75 +68,41 @@ export function Player() {
 
   const updatePlayerPosition = useGameStore(state => state.updatePlayerPosition);
 
+  const hasActiveDisc = discs.some(d => d.ownerId === (socket?.id || 'local'));
+
   // Shooting logic function
   const shoot = () => {
     if (gameState !== 'playing' || playerState !== 'active') return;
+    if (hasActiveDisc || throwTimer.current > 0) return; // Only 1 disc at a time
     
     // Rate limit shooting
     const now = Date.now();
     if (now - lastShootTime.current < 200) return;
     lastShootTime.current = now;
 
-    // Raycast from camera
-    const raycaster = new THREE.Raycaster();
-    raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
-
-    // Start raycast slightly ahead of the camera to avoid hitting the player's own collider
-    const rayStart = camera.position.clone().add(raycaster.ray.direction.clone().multiplyScalar(0.8));
-    const ray = new rapier.Ray(rayStart, raycaster.ray.direction);
-    const hit = world.castRay(ray, MAX_LASER_DIST, true);
-
-    const startPosVec = new THREE.Vector3();
-    if (gunBarrelRef.current) {
-      gunBarrelRef.current.getWorldPosition(startPosVec);
-    } else {
-      startPosVec.copy(camera.position);
-    }
-    const startPos: [number, number, number] = [startPosVec.x, startPosVec.y, startPosVec.z];
-
-    // Apply recoil
-    if (gunVisualRef.current) {
-      gunVisualRef.current.position.z = -0.4;
-      gunVisualRef.current.rotation.x = 0.1;
-    }
-
-    let endPos: [number, number, number];
-
-    if (hit) {
-      const hitPoint = ray.pointAt(hit.timeOfImpact);
-      endPos = [hitPoint.x, hitPoint.y, hitPoint.z];
-      
-      const collider = hit.collider;
-      const rb = collider.parent();
-      if (rb && rb.userData) {
-        const userData = rb.userData as { name?: string };
-        const name = userData.name;
-        
-        if (name) {
-          // Check if it's a bot
-          if (name.startsWith('bot-')) {
-            hitEnemy(name, true);
-          } 
-          // Check if it's another player (socket ID)
-          else if (name !== 'player' && useGameStore.getState().otherPlayers[name]) {
-            hitEnemy(name, true);
-          }
-        }
-      }
-      
-      addParticles(endPos, '#00ffff');
-    } else {
-      endPos = [
-        camera.position.x + raycaster.ray.direction.x * MAX_LASER_DIST,
-        camera.position.y + raycaster.ray.direction.y * MAX_LASER_DIST,
-        camera.position.z + raycaster.ray.direction.z * MAX_LASER_DIST
-      ];
-    }
-
-    addLaser(startPos, endPos, '#00ffff');
+    // Start throw animation
+    throwTimer.current = 0.15;
   };
 
-  useFrame((_, delta) => {
+  useFrame((state, delta) => {
+    if (throwTimer.current > 0) {
+      throwTimer.current -= delta;
+      if (throwTimer.current <= 0) {
+        // Spawn disc
+        const raycaster = new THREE.Raycaster();
+        if (document.pointerLockElement) {
+          raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+        } else {
+          raycaster.setFromCamera(mouse, camera);
+        }
+
+        const startPosVec = camera.position.clone().add(raycaster.ray.direction.clone().multiplyScalar(1.0));
+        const startPos: [number, number, number] = [startPosVec.x, startPosVec.y, startPosVec.z];
+        const direction: [number, number, number] = [raycaster.ray.direction.x, raycaster.ray.direction.y, raycaster.ray.direction.z];
+
+        addDisc(startPos, direction, '#00ffff', socket?.id || 'local');
+      }
+    }
     if (!body.current || gameState !== 'playing') return;
 
     const mobileInput = useGameStore.getState().mobileInput;
@@ -235,13 +203,52 @@ export function Player() {
     // Sync gun to camera
     if (gunGroupRef.current) {
       gunGroupRef.current.position.copy(camera.position);
-      gunGroupRef.current.quaternion.copy(camera.quaternion);
+      
+      if (document.pointerLockElement) {
+        gunGroupRef.current.quaternion.copy(camera.quaternion);
+      } else {
+        const raycaster = new THREE.Raycaster();
+        raycaster.setFromCamera(mouse, camera);
+        const target = camera.position.clone().add(raycaster.ray.direction.multiplyScalar(10));
+        gunGroupRef.current.lookAt(target);
+      }
     }
     
-    // Recover recoil
-    if (gunVisualRef.current) {
-      gunVisualRef.current.position.z = THREE.MathUtils.lerp(gunVisualRef.current.position.z, -0.6, delta * 15);
-      gunVisualRef.current.rotation.x = THREE.MathUtils.lerp(gunVisualRef.current.rotation.x, 0, delta * 15);
+    // Edge panning if not pointer locked
+    if (!document.pointerLockElement && !isTouchDevice.current) {
+      const edgeThreshold = 0.15; // 15% of screen edge
+      const panSpeed = 1.5 * delta;
+      
+      if (mouse.x > 1 - edgeThreshold * 2) {
+        camera.rotation.y -= panSpeed * ((mouse.x - (1 - edgeThreshold * 2)) / (edgeThreshold * 2));
+      } else if (mouse.x < -1 + edgeThreshold * 2) {
+        camera.rotation.y += panSpeed * (((-1 + edgeThreshold * 2) - mouse.x) / (edgeThreshold * 2));
+      }
+      
+      if (mouse.y > 1 - edgeThreshold * 2) {
+        camera.rotation.x -= panSpeed * ((mouse.y - (1 - edgeThreshold * 2)) / (edgeThreshold * 2));
+      } else if (mouse.y < -1 + edgeThreshold * 2) {
+        camera.rotation.x += panSpeed * (((-1 + edgeThreshold * 2) - mouse.y) / (edgeThreshold * 2));
+      }
+      
+      camera.rotation.x = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, camera.rotation.x));
+    }
+
+    // Throw animation and recoil recovery
+    if (discVisualRef.current) {
+      if (throwTimer.current > 0) {
+        const t = 1 - (throwTimer.current / 0.15); // 0 to 1
+        discVisualRef.current.position.z = -t * 0.8;
+        discVisualRef.current.position.x = -t * 0.2;
+        discVisualRef.current.rotation.z = -t * Math.PI / 2;
+      } else {
+        discVisualRef.current.position.z = THREE.MathUtils.lerp(discVisualRef.current.position.z, 0, delta * 10);
+        discVisualRef.current.position.x = THREE.MathUtils.lerp(discVisualRef.current.position.x, 0, delta * 10);
+        discVisualRef.current.rotation.z = THREE.MathUtils.lerp(discVisualRef.current.rotation.z, 0, delta * 10);
+      }
+      
+      // Spin the disc
+      discVisualRef.current.rotation.y += delta * 15;
     }
 
     // Emit position to server
@@ -267,30 +274,13 @@ export function Player() {
     };
     window.addEventListener('mousedown', handleClick);
     return () => window.removeEventListener('mousedown', handleClick);
-  }, [gameState, playerState, camera, world, rapier, hitEnemy, addParticles, addLaser]);
+  }, [gameState, playerState, camera, world, rapier, hitEnemy, addParticles, addDisc, hasActiveDisc]);
 
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (gameState !== 'playing' || playerState !== 'active') return;
-      if (document.pointerLockElement) return; // PointerLockControls is working
 
-      // Fallback: rotate camera when dragging
-      if (e.buttons === 1 || e.buttons === 2) {
-        const movementX = e.movementX || 0;
-        const movementY = e.movementY || 0;
-        
-        camera.rotation.y -= movementX * 0.002;
-        camera.rotation.x -= movementY * 0.002;
-        camera.rotation.x = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, camera.rotation.x));
-      }
-    };
-    window.addEventListener('mousemove', handleMouseMove);
-    return () => window.removeEventListener('mousemove', handleMouseMove);
-  }, [gameState, playerState, camera]);
 
   return (
     <>
-      {!isTouchDevice.current && <PointerLockControls />}
+      <PointerLockControls />
       <RigidBody
         ref={body}
         colliders={false}
@@ -304,30 +294,25 @@ export function Player() {
         <CapsuleCollider args={[0.5, 0.5]} position={[0, 1, 0]} friction={0} />
       </RigidBody>
 
-      {/* First Person Gun */}
+      {/* First Person Disc */}
       <group ref={gunGroupRef}>
-        <group ref={gunVisualRef} position={[0.4, -0.3, -0.6]}>
-          {/* Main body */}
-          <mesh position={[0, 0, 0.2]}>
-            <boxGeometry args={[0.1, 0.15, 0.4]} />
-            <meshStandardMaterial color="#222" metalness={0.8} roughness={0.2} />
-          </mesh>
-          {/* Barrel */}
-          <mesh position={[0, 0.05, -0.15]} rotation={[Math.PI / 2, 0, 0]}>
-            <cylinderGeometry args={[0.03, 0.03, 0.3, 8]} />
-            <meshStandardMaterial color="#111" metalness={0.9} roughness={0.1} />
-          </mesh>
-          {/* Neon accents */}
-          <mesh position={[0, 0.08, 0.1]}>
-            <boxGeometry args={[0.11, 0.02, 0.2]} />
-            <meshBasicMaterial color="#00ffff" toneMapped={false} />
-          </mesh>
-          <mesh position={[0, 0.05, -0.25]} rotation={[Math.PI / 2, 0, 0]}>
-            <cylinderGeometry args={[0.035, 0.035, 0.05, 8]} />
-            <meshBasicMaterial color="#ff00ff" toneMapped={false} />
-          </mesh>
-          {/* Barrel Tip Reference */}
-          <group ref={gunBarrelRef} position={[0, 0.05, -0.3]} />
+        <group position={[0.4, -0.3, -0.6]}>
+          {!hasActiveDisc && (
+            <group ref={discVisualRef} rotation={[0.1, 0, 0]}>
+              <mesh>
+                <cylinderGeometry args={[0.2, 0.2, 0.02, 32]} />
+                <meshStandardMaterial color="#111" metalness={0.8} roughness={0.2} />
+              </mesh>
+              <mesh rotation={[Math.PI / 2, 0, 0]}>
+                <torusGeometry args={[0.2, 0.02, 16, 32]} />
+                <meshStandardMaterial color="#00ffff" emissive="#00ffff" emissiveIntensity={2} toneMapped={false} />
+              </mesh>
+              <mesh rotation={[Math.PI / 2, 0, 0]} position={[0, 0.011, 0]}>
+                <ringGeometry args={[0.08, 0.1, 32]} />
+                <meshStandardMaterial color="#00ffff" emissive="#00ffff" emissiveIntensity={2} toneMapped={false} side={THREE.DoubleSide} />
+              </mesh>
+            </group>
+          )}
         </group>
       </group>
     </>

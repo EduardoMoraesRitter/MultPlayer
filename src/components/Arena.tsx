@@ -30,57 +30,163 @@ function useIsMobile() {
   return isMobile;
 }
 
-// Seeded PRNG for consistent multiplayer obstacle generation
-function mulberry32(a: number) {
-  return function() {
-    var t = a += 0x6D2B79F5;
-    t = Math.imul(t ^ t >>> 15, t | 1);
-    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
-    return ((t ^ t >>> 14) >>> 0) / 4294967296;
-  }
-}
-const rng = mulberry32(12345);
-
-const OBSTACLES = Array.from({ length: 150 }).map(() => {
-  const type = 'box';
-  const x = (rng() - 0.5) * 170; // Avoid edges
-  const z = (rng() - 0.5) * 170;
-  
-  // Keep center somewhat clear
-  if (Math.abs(x) < 20 && Math.abs(z) < 20) return null;
-
-  const height = rng() * 8 + 6;
-  const isHorizontal = rng() > 0.5;
-  const width = isHorizontal ? rng() * 25 + 10 : rng() * 3 + 1;
-  const depth = isHorizontal ? rng() * 3 + 1 : rng() * 25 + 10;
-  const rotation = 0; // Axis aligned for maze feel
-  const color = rng() > 0.5 ? "#00ffff" : "#ff00ff";
-
-  return { type, position: [x, height / 2 - 0.5, z], size: [width, height, depth], rotation: [0, rotation, 0], color };
-}).filter(Boolean);
-
 export function Arena() {
   const isMobile = useIsMobile();
   
   const obstacles = useMemo(() => {
-    const count = isMobile ? 60 : 150;
-    const rngLocal = mulberry32(12345);
-    return Array.from({ length: count }).map(() => {
-      const type = 'box';
-      const x = (rngLocal() - 0.5) * 170;
-      const z = (rngLocal() - 0.5) * 170;
-      
-      if (Math.abs(x) < 20 && Math.abs(z) < 20) return null;
+    const obsList: any[] = [];
+    
+    // 1. Center Block
+    obsList.push({
+      type: 'box',
+      position: [0, 10 / 2 - 0.5, 0],
+      size: [8, 10, 8],
+      rotation: [0, Math.PI / 4, 0],
+      color: '#ff00ff'
+    });
 
-      const height = rngLocal() * 8 + 6;
-      const isHorizontal = rngLocal() > 0.5;
-      const width = isHorizontal ? rngLocal() * 25 + 10 : rngLocal() * 3 + 1;
-      const depth = isHorizontal ? rngLocal() * 3 + 1 : rngLocal() * 25 + 10;
-      const color = rngLocal() > 0.5 ? "#00ffff" : "#ff00ff";
+    // 2. Central structure (4 pillars)
+    const centerDist = 18;
+    const pillarSize = 4;
+    const pillarHeight = 14;
+    [
+      [centerDist, centerDist],
+      [-centerDist, centerDist],
+      [centerDist, -centerDist],
+      [-centerDist, -centerDist]
+    ].forEach(([x, z]) => {
+      obsList.push({
+        type: 'box',
+        position: [x, pillarHeight / 2 - 0.5, z],
+        size: [pillarSize, pillarHeight, pillarSize],
+        rotation: [0, 0, 0],
+        color: '#00ffff'
+      });
+    });
 
-      return { type, position: [x, height / 2 - 0.5, z], size: [width, height, depth], rotation: [0, 0, 0], color };
-    }).filter(Boolean);
-  }, [isMobile]);
+    // 3. Diagonal barriers between pillars and center
+    const diagDist = 12;
+    [
+      [diagDist, 0, 0],
+      [-diagDist, 0, 0],
+      [0, diagDist, Math.PI / 2],
+      [0, -diagDist, Math.PI / 2]
+    ].forEach(([x, z, rot]) => {
+      obsList.push({
+        type: 'box',
+        position: [x, 4 / 2 - 0.5, z],
+        size: [2, 4, 10],
+        rotation: [0, rot, 0],
+        color: '#00ffff'
+      });
+    });
+
+    // 4. Inner ring walls (with gaps)
+    const ringDist = 35;
+    const wallLength = 30;
+    const wallThickness = 2;
+    const wallHeight = 8;
+    [
+      [0, ringDist, wallLength, wallThickness],
+      [0, -ringDist, wallLength, wallThickness],
+      [ringDist, 0, wallThickness, wallLength],
+      [-ringDist, 0, wallThickness, wallLength]
+    ].forEach(([x, z, w, d]) => {
+      obsList.push({
+        type: 'box',
+        position: [x, wallHeight / 2 - 0.5, z],
+        size: [w, wallHeight, d],
+        rotation: [0, 0, 0],
+        color: '#ff00ff'
+      });
+    });
+
+    // 5. Mid-field Low Cover Walls (good for crouching/hiding)
+    const lowCoverDist = 50;
+    [
+      [lowCoverDist, lowCoverDist, Math.PI / 4],
+      [-lowCoverDist, lowCoverDist, -Math.PI / 4],
+      [lowCoverDist, -lowCoverDist, -Math.PI / 4],
+      [-lowCoverDist, -lowCoverDist, Math.PI / 4],
+      [lowCoverDist, 0, 0],
+      [-lowCoverDist, 0, 0],
+      [0, lowCoverDist, Math.PI / 2],
+      [0, -lowCoverDist, Math.PI / 2]
+    ].forEach(([x, z, rot]) => {
+      obsList.push({
+        type: 'box',
+        position: [x, 3 / 2 - 0.5, z],
+        size: [2, 3, 16],
+        rotation: [0, rot, 0],
+        color: '#00ffff'
+      });
+    });
+
+    // 6. Outer corner L-shapes
+    const cornerDist = 70;
+    const lLength = 35;
+    [
+      [cornerDist, cornerDist],
+      [-cornerDist, cornerDist],
+      [cornerDist, -cornerDist],
+      [-cornerDist, -cornerDist]
+    ].forEach(([x, z]) => {
+      obsList.push({
+        type: 'box',
+        position: [x, wallHeight / 2 - 0.5, z - Math.sign(z) * (lLength/2)],
+        size: [wallThickness, wallHeight, lLength],
+        rotation: [0, 0, 0],
+        color: '#ff00ff'
+      });
+      obsList.push({
+        type: 'box',
+        position: [x - Math.sign(x) * (lLength/2), wallHeight / 2 - 0.5, z],
+        size: [lLength, wallHeight, wallThickness],
+        rotation: [0, 0, 0],
+        color: '#ff00ff'
+      });
+    });
+
+    // 7. Scattered cover blocks (small boxes)
+    const scatterDist = 60;
+    [
+      [scatterDist, 20],
+      [scatterDist, -20],
+      [-scatterDist, 20],
+      [-scatterDist, -20],
+      [20, scatterDist],
+      [-20, scatterDist],
+      [20, -scatterDist],
+      [-20, -scatterDist]
+    ].forEach(([x, z]) => {
+      obsList.push({
+        type: 'box',
+        position: [x, 5 / 2 - 0.5, z],
+        size: [5, 5, 5],
+        rotation: [0, Math.PI / 4, 0],
+        color: '#00ffff'
+      });
+    });
+
+    // 8. Long side barriers
+    const sideDist = 85;
+    [
+      [sideDist, 0, 2, 12, 40],
+      [-sideDist, 0, 2, 12, 40],
+      [0, sideDist, 40, 12, 2],
+      [0, -sideDist, 40, 12, 2]
+    ].forEach(([x, z, w, h, d]) => {
+      obsList.push({
+        type: 'box',
+        position: [x, h / 2 - 0.5, z],
+        size: [w, h, d],
+        rotation: [0, 0, 0],
+        color: '#ff00ff'
+      });
+    });
+
+    return obsList;
+  }, []);
 
   return (
     <group>
